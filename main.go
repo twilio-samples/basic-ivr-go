@@ -50,6 +50,17 @@ func handlePhoneCall(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(twiml))
 }
 
+func sendSMS(recipientPhoneNumber string, twilioPhoneNumber string) (*api.ApiV2010Message, error) {
+	client := twilio.NewRestClient()
+
+	params := &api.CreateMessageParams{}
+	params.SetBody("Here is our address: 375 Beale St #300, San Francisco, CA 94105, USA")
+	params.SetFrom(twilioPhoneNumber)
+	params.SetTo(recipientPhoneNumber)
+
+	return client.Api.CreateMessage(params)
+}
+
 // gatherUserInput responds to the user's input
 func gatherUserInput(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/xml")
@@ -80,14 +91,8 @@ func gatherUserInput(w http.ResponseWriter, r *http.Request) {
 	case 3:
 		say := &twiml.VoiceSay{Message: "We will send you a text message with our address in a minute."}
 
-		client := twilio.NewRestClient()
-
-		params := &api.CreateMessageParams{}
-		params.SetBody("Here is our address: 375 Beale St #300, San Francisco, CA 94105, USA")
-		params.SetFrom(os.Getenv("TWILIO_PHONE_NUMBER"))
-		params.SetTo(r.FormValue("From"))
-
-		resp, err := client.Api.CreateMessage(params)
+		// Send the SMS to the user
+		resp, err := sendSMS(r.FormValue("From"), os.Getenv("TWILIO_PHONE_NUMBER"))
 		if err != nil {
 			fmt.Println(err.Error())
 			os.Exit(1)
