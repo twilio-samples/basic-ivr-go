@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/ddymko/go-jsonerror"
 	"github.com/joho/godotenv"
+	"github.com/twilio/twilio-go"
+	api "github.com/twilio/twilio-go/rest/api/v2010"
 	"github.com/twilio/twilio-go/twiml"
 )
+
+const ivrMessage string = "To talk to sales, press 1. For our hours of operation, press 2. For our address, press 3."
 
 func appError(w http.ResponseWriter, err error) {
 	var error jsonerror.ErrorJSON
@@ -24,18 +29,21 @@ func appError(w http.ResponseWriter, err error) {
 
 // handlePhoneCall receives the initial call and provides the options that the IVR supports
 func handlePhoneCall(w http.ResponseWriter, r *http.Request) {
-	gather := &twiml.VoiceGather{
-		NumDigits: "1",
-		Action:    "/gather",
-	}
-	say := &twiml.VoiceSay{
-		Message: "To talk to sales, press 1. For our hours of operation, press 2. For our address, press 3.",
-	}
-	redirect := &twiml.VoiceRedirect{
-		Url: "/",
-	}
-	twiml, err := twiml.Voice([]twiml.Element{gather, say, redirect})
-	if err == nil {
+	twiml, err := twiml.Voice([]twiml.Element{
+		&twiml.VoiceGather{
+			NumDigits: "1",
+			Action:    "/gather",
+			InnerElements: []twiml.Element{
+				&twiml.VoiceSay{
+					Message: ivrMessage,
+				},
+			},
+		},
+		&twiml.VoiceSay{
+			Message: "We didn't receive any input. Goodbye!",
+		},
+	})
+	if err != nil {
 		appError(w, fmt.Errorf("could not prepare TwiML. reason: %s", err))
 	}
 	w.Header().Add("Content-Type", "application/xml")
@@ -51,11 +59,14 @@ func gatherUserInput(w http.ResponseWriter, r *http.Request) {
 		redirect := &twiml.VoiceRedirect{
 			Url: "/",
 		}
-		twiml, err := twiml.Voice([]twiml.Element{redirect})
-		if err == nil {
+		say := &twiml.VoiceSay{Message: "No choice was provided. " + ivrMessage}
+		twiml, err := twiml.Voice([]twiml.Element{say, redirect})
+		if err != nil {
 			appError(w, fmt.Errorf("could not prepare redirect TwiML. reason: %s", err))
 		}
 		w.Write([]byte(twiml))
+
+		return
 	}
 
 	var twimlElements []twiml.Element
@@ -68,14 +79,34 @@ func gatherUserInput(w http.ResponseWriter, r *http.Request) {
 		twimlElements = append(twimlElements, say)
 	case 3:
 		say := &twiml.VoiceSay{Message: "We will send you a text message with our address in a minute."}
+
+		client := twilio.NewRestClient()
+
+		params := &api.CreateMessageParams{}
+		params.SetBody("Here is our address: 375 Beale St #300, San Francisco, CA 94105, USA")
+		params.SetFrom(os.Getenv("TWILIO_PHONE_NUMBER"))
+		params.SetTo(r.FormValue("From"))
+
+		resp, err := client.Api.CreateMessage(params)
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(1)
+		} else {
+			if resp.Body != nil {
+				fmt.Println(*resp.Body)
+			} else {
+				fmt.Println(resp.Body)
+			}
+		}
+
 		twimlElements = append(twimlElements, say)
 	default:
 		say := &twiml.VoiceSay{Message: "Sorry, I don't understand that choice."}
-		redirect := &twiml.VoiceRedirect{Url: "/"}
-		twimlElements = append(twimlElements, say, redirect)
+		twimlElements = append(twimlElements, say)
 	}
+
 	twiml, err := twiml.Voice(twimlElements)
-	if err == nil {
+	if err != nil {
 		appError(w, fmt.Errorf("could not prepare TwiML. reason: %s", err))
 	}
 
@@ -90,7 +121,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /", handlePhoneCall)
-	mux.HandleFunc("POST /sms", gatherUserInput)
+	mux.HandleFunc("POST /gather", gatherUserInput)
 
 	log.Print("Starting server on :8080")
 	err = http.ListenAndServe(":8080", mux)
